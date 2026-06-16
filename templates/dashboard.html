@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard — Prompt Injection Defense</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',sans-serif;color:#f1f5f9;min-height:100vh;overflow-x:hidden;background:#020810}
+.app{position:relative;z-index:1;max-width:1200px;margin:0 auto;padding:2rem;display:flex;flex-direction:column;gap:1.5rem}
+header{display:flex;align-items:center;gap:1rem;padding:1rem 1.5rem;background:rgba(255,255,255,0.03);border:1px solid rgba(59,130,246,0.2);border-radius:16px;backdrop-filter:blur(20px);box-shadow:0 0 30px rgba(59,130,246,0.05)}
+header h1{font-size:1.4rem;font-weight:700}
+header p{color:#64748b;font-size:0.85rem;margin-top:2px}
+nav{display:flex;gap:8px;margin-left:auto}
+.nav-btn{padding:6px 16px;border-radius:20px;font-size:13px;text-decoration:none;color:#64748b;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);transition:all 0.2s}
+.nav-btn:hover{background:rgba(255,255,255,0.08);color:#f1f5f9}
+.nav-btn.active{background:linear-gradient(135deg,#3b82f6,#8b5cf6);color:white;border-color:transparent;box-shadow:0 0 20px rgba(59,130,246,0.4)}
+.glass-panel{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:1.25rem;backdrop-filter:blur(20px)}
+.stat-card{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:1.25rem;backdrop-filter:blur(20px);transition:transform 0.2s,box-shadow 0.2s;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--accent)}
+.stat-card:hover{transform:translateY(-4px);box-shadow:0 8px 30px rgba(59,130,246,0.15)}
+.stat-label{font-size:12px;color:#64748b;margin-bottom:8px}
+.stat-value{font-size:2.2rem;font-weight:700}
+.stat-sub{font-size:11px;color:#64748b;margin-top:6px}
+.stat-icon{position:absolute;bottom:1rem;right:1rem;font-size:40px;opacity:0.06}
+.card-title{font-size:13px;font-weight:500;color:#94a3b8;margin-bottom:1rem;display:flex;align-items:center;gap:8px}
+.card-title::before{content:'';width:3px;height:14px;background:linear-gradient(135deg,#3b82f6,#8b5cf6);border-radius:2px}
+.pulse{display:inline-block;width:8px;height:8px;border-radius:50%;background:#10b981;margin-right:6px;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(16,185,129,0.4)}50%{box-shadow:0 0 0 6px rgba(16,185,129,0)}}
+.live-badge{display:flex;align-items:center;font-size:11px;color:#10b981;margin-left:auto}
+select option{background:#1e293b;color:#f1f5f9}
+tr:hover{background:rgba(255,255,255,0.03)}
+</style>
+
+<style>
+.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.charts-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.8fr);gap:12px}
+.attack-row{display:grid;grid-template-columns:1fr 130px 80px;gap:8px;padding:10px;background:rgba(255,255,255,0.02);border-radius:8px;border:1px solid rgba(255,255,255,0.04);margin-bottom:8px;transition:all 0.2s}
+.attack-row:hover{background:rgba(59,130,246,0.05);border-color:rgba(59,130,246,0.2)}
+</style>
+</head>
+<body>
+
+<canvas id="bg-canvas" style="position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none"></canvas>
+<div id="cursor-dot" style="width:12px;height:12px;background:#ffffff;border-radius:50%;position:fixed;pointer-events:none;z-index:99999;transform:translate(-50%,-50%);box-shadow:0 0 15px rgba(255,255,255,1),0 0 30px rgba(59,130,246,0.8);transition:transform 0.1s"></div>
+<div id="cursor-ring" style="width:36px;height:36px;border:2px solid rgba(255,255,255,0.8);border-radius:50%;position:fixed;pointer-events:none;z-index:99998;transform:translate(-50%,-50%);box-shadow:0 0 10px rgba(59,130,246,0.5);transition:width 0.2s,height 0.2s"></div>
+
+<script>
+const bgC=document.getElementById('bg-canvas');
+const bgX=bgC.getContext('2d');
+const dot=document.getElementById('cursor-dot');
+const ring=document.getElementById('cursor-ring');
+let W,H,parts,drops,angle=0,mx=0,my=0,rx=0,ry=0,trail=[];
+
+function resize(){
+  W=bgC.width=window.innerWidth;
+  H=bgC.height=window.innerHeight;
+  drops=Array.from({length:Math.floor(W/20)},()=>Math.random()*-H/16);
+}
+
+function initParts(){
+  parts=Array.from({length:60},()=>({
+    x:Math.random()*W,y:Math.random()*H,
+    r:Math.random()*1.5+0.5,
+    vx:(Math.random()-.5)*.3,vy:(Math.random()-.5)*.3,
+    o:Math.random()*.5+.1,
+    c:Math.random()>.5?'59,130,246':'139,92,246'
+  }));
+}
+
+const mc='01アイウエオカキクケコ';
+function drawBg(){
+  bgX.clearRect(0,0,W,H);
+  angle+=.002;
+  const gx=W/2+Math.cos(angle)*W*.3;
+  const gy=H/2+Math.sin(angle)*H*.3;
+  const g=bgX.createRadialGradient(gx,gy,0,W/2,H/2,Math.max(W,H));
+  g.addColorStop(0,'rgba(10,20,50,1)');
+  g.addColorStop(.5,'rgba(5,15,35,1)');
+  g.addColorStop(1,'rgba(2,8,16,1)');
+  bgX.fillStyle=g;bgX.fillRect(0,0,W,H);
+
+  const g1=bgX.createRadialGradient(W*.2,H*.2,0,W*.2,H*.2,W*.4);
+  g1.addColorStop(0,'rgba(59,130,246,0.08)');g1.addColorStop(1,'transparent');
+  bgX.fillStyle=g1;bgX.fillRect(0,0,W,H);
+
+  const g2=bgX.createRadialGradient(W*.8,H*.8,0,W*.8,H*.8,W*.4);
+  g2.addColorStop(0,'rgba(139,92,246,0.06)');g2.addColorStop(1,'transparent');
+  bgX.fillStyle=g2;bgX.fillRect(0,0,W,H);
+
+  bgX.strokeStyle='rgba(59,130,246,0.04)';bgX.lineWidth=1;
+  for(let x=0;x<W;x+=40){bgX.beginPath();bgX.moveTo(x,0);bgX.lineTo(x,H);bgX.stroke();}
+  for(let y=0;y<H;y+=40){bgX.beginPath();bgX.moveTo(0,y);bgX.lineTo(W,y);bgX.stroke();}
+
+  bgX.font='12px monospace';
+  drops.forEach((y,i)=>{
+    bgX.fillStyle='rgba(16,185,129,0.12)';
+    bgX.fillText(mc[Math.floor(Math.random()*mc.length)],i*20,y*16);
+    if(y*16>H&&Math.random()>.975)drops[i]=0;
+    drops[i]+=.5;
+  });
+
+  if(!parts)initParts();
+  parts.forEach(p=>{
+    p.x+=p.vx;p.y+=p.vy;
+    if(p.x<0||p.x>W)p.vx*=-1;
+    if(p.y<0||p.y>H)p.vy*=-1;
+    bgX.beginPath();bgX.arc(p.x,p.y,p.r,0,Math.PI*2);
+    bgX.fillStyle='rgba('+p.c+','+p.o+')';bgX.fill();
+  });
+
+  parts.forEach((p,i)=>{
+    parts.slice(i+1).forEach(q=>{
+      const d=Math.hypot(p.x-q.x,p.y-q.y);
+      if(d<100){
+        bgX.beginPath();bgX.moveTo(p.x,p.y);bgX.lineTo(q.x,q.y);
+        bgX.strokeStyle='rgba(59,130,246,'+(0.05*(1-d/100))+')';
+        bgX.lineWidth=.5;bgX.stroke();
+      }
+    });
+  });
+  requestAnimationFrame(drawBg);
+}
+
+document.addEventListener('mousemove',e=>{
+  mx=e.clientX;my=e.clientY;
+  dot.style.left=mx+'px';dot.style.top=my+'px';
+  trail.push({x:mx,y:my,age:0});
+  if(trail.length>20)trail.shift();
+});
+
+document.addEventListener('mousedown',()=>{
+  dot.style.transform='translate(-50%,-50%) scale(1.8)';
+  dot.style.background='#3b82f6';
+  ring.style.width='20px';ring.style.height='20px';
+});
+
+document.addEventListener('mouseup',()=>{
+  dot.style.transform='translate(-50%,-50%) scale(1)';
+  dot.style.background='#ffffff';
+  ring.style.width='36px';ring.style.height='36px';
+});
+
+function animCursor(){
+  rx+=(mx-rx)*.1;ry+=(my-ry)*.1;
+  ring.style.left=rx+'px';ring.style.top=ry+'px';
+  requestAnimationFrame(animCursor);
+}
+
+window.addEventListener('resize',resize);
+resize();initParts();drawBg();animCursor();
+</script>
+<style>*{cursor:none!important}</style>
+
+<div class="app">
+  <header>
+    <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+      <path d="M18 3L6 8v10c0 7.18 5.16 13.9 12 15.5C24.84 31.9 30 25.18 30 18V8L18 3z" fill="#3b82f6" opacity="0.3" stroke="#3b82f6" stroke-width="1.5"/>
+      <path d="M13 18l3.5 3.5L23 14" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div><h1>Prompt Injection Defense</h1><p>Security Dashboard</p></div>
+    <nav>
+      <a href="/" class="nav-btn">Home</a>
+      <a href="/dashboard" class="nav-btn active">Dashboard</a>
+      <a href="/logs" class="nav-btn">Attack Logs</a>
+    </nav>
+  </header>
+  <div class="stats-grid">
+    <div class="stat-card" style="--accent:linear-gradient(135deg,#3b82f6,#8b5cf6)">
+      <div class="stat-icon">📊</div>
+      <div class="stat-label">Total requests</div>
+      <div class="stat-value" id="total" style="color:#f1f5f9">0</div>
+      <div class="stat-sub">all time</div>
+    </div>
+    <div class="stat-card" style="--accent:linear-gradient(135deg,#ef4444,#f97316)">
+      <div class="stat-icon">🛡️</div>
+      <div class="stat-label">Attacks blocked</div>
+      <div class="stat-value" id="blocked" style="color:#ef4444">0</div>
+      <div class="stat-sub" id="block-rate">0% block rate</div>
+    </div>
+    <div class="stat-card" style="--accent:linear-gradient(135deg,#10b981,#06b6d4)">
+      <div class="stat-icon">✅</div>
+      <div class="stat-label">Safe responses</div>
+      <div class="stat-value" id="safe" style="color:#10b981">0</div>
+      <div class="stat-sub" id="safe-rate">0% pass rate</div>
+    </div>
+    <div class="stat-card" style="--accent:linear-gradient(135deg,#f59e0b,#ef4444)">
+      <div class="stat-icon">⚡</div>
+      <div class="stat-label">CPU calls saved</div>
+      <div class="stat-value" id="saved" style="color:#f59e0b">0</div>
+      <div class="stat-sub">LLM calls avoided</div>
+    </div>
+  </div>
+  <div class="charts-grid">
+    <div class="glass-panel">
+      <div class="card-title">Attack categories</div>
+      <div style="position:relative;height:200px"><canvas id="pieChart"></canvas></div>
+      <div id="legend" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px"></div>
+    </div>
+    <div class="glass-panel">
+      <div class="card-title">Recent attacks<span class="live-badge"><span class="pulse"></span>Live</span></div>
+      <div id="recent-attacks"><div style="color:#64748b;font-size:13px">No attacks logged yet...</div></div>
+    </div>
+  </div>
+</div>
+<script>
+const COLORS={jailbreak:'#ef4444',harmful_content:'#f59e0b',bypass_attempt:'#3b82f6',real_attack:'#8b5cf6',safe:'#10b981',error:'#6b7280',unknown:'#6b7280',ignore_instructions:'#ef4444',parse_error:'#6b7280'};
+let pieChart=null;
+async function loadStats(){
+  try{
+    const res=await fetch('/api/stats');
+    const stats=await res.json();
+    document.getElementById('total').textContent=stats.total;
+    document.getElementById('blocked').textContent=stats.blocked;
+    document.getElementById('safe').textContent=stats.safe;
+    document.getElementById('saved').textContent=stats.blocked;
+    const br=stats.total>0?((stats.blocked/stats.total)*100).toFixed(1):0;
+    const sr=stats.total>0?((stats.safe/stats.total)*100).toFixed(1):0;
+    document.getElementById('block-rate').textContent=br+'% block rate';
+    document.getElementById('safe-rate').textContent=sr+'% pass rate';
+    const cats=stats.categories||{};
+    const labels=Object.keys(cats);
+    const values=Object.values(cats);
+    const colors=labels.map(l=>COLORS[l]||'#6b7280');
+    if(labels.length>0){
+      if(pieChart)pieChart.destroy();
+      pieChart=new Chart(document.getElementById('pieChart'),{type:'doughnut',data:{labels,datasets:[{data:values,backgroundColor:colors,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},cutout:'65%'}});
+      document.getElementById('legend').innerHTML=labels.map((l,i)=>'<span style="display:flex;align-items:center;gap:4px;font-size:11px;color:#94a3b8"><span style="width:8px;height:8px;border-radius:2px;background:'+colors[i]+';display:inline-block"></span>'+l+' ('+values[i]+')</span>').join('');
+    }
+  }catch(e){console.error(e);}
+}
+async function loadRecentAttacks(){
+  try{
+    const res=await fetch('/api/logs');
+    const logs=await res.json();
+    const blocked=logs.filter(l=>l.verdict==='blocked').slice(0,5);
+    if(blocked.length===0){document.getElementById('recent-attacks').innerHTML='<div style="color:#64748b;font-size:13px">No attacks logged yet...</div>';return;}
+    document.getElementById('recent-attacks').innerHTML=blocked.map(l=>{
+      const color=COLORS[l.category]||'#6b7280';
+      return '<div class="attack-row"><div style="font-size:12px;color:#f1f5f9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+l.prompt+'</div><div style="font-size:11px;color:'+color+';text-align:center;background:'+color+'22;padding:2px 6px;border-radius:4px;white-space:nowrap;align-self:center">'+l.category+'</div><div style="font-size:11px;color:#64748b;text-align:right;align-self:center">'+l.timestamp.split(' ')[1]+'</div></div>';
+    }).join('');
+  }catch(e){console.error(e);}
+}
+loadStats();loadRecentAttacks();
+setInterval(()=>{loadStats();loadRecentAttacks();},5000);
+</script>
+</body>
+</html>

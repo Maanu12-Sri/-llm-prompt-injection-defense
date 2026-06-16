@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Attack Logs — Prompt Injection Defense</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',sans-serif;color:#f1f5f9;min-height:100vh;overflow-x:hidden;background:#020810}
+.app{position:relative;z-index:1;max-width:1200px;margin:0 auto;padding:2rem;display:flex;flex-direction:column;gap:1.5rem}
+header{display:flex;align-items:center;gap:1rem;padding:1rem 1.5rem;background:rgba(255,255,255,0.03);border:1px solid rgba(59,130,246,0.2);border-radius:16px;backdrop-filter:blur(20px);box-shadow:0 0 30px rgba(59,130,246,0.05)}
+header h1{font-size:1.4rem;font-weight:700}
+header p{color:#64748b;font-size:0.85rem;margin-top:2px}
+nav{display:flex;gap:8px;margin-left:auto}
+.nav-btn{padding:6px 16px;border-radius:20px;font-size:13px;text-decoration:none;color:#64748b;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);transition:all 0.2s}
+.nav-btn:hover{background:rgba(255,255,255,0.08);color:#f1f5f9}
+.nav-btn.active{background:linear-gradient(135deg,#3b82f6,#8b5cf6);color:white;border-color:transparent;box-shadow:0 0 20px rgba(59,130,246,0.4)}
+.glass-panel{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:1.25rem;backdrop-filter:blur(20px)}
+.stat-card{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:1.25rem;backdrop-filter:blur(20px);transition:transform 0.2s,box-shadow 0.2s;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--accent)}
+.stat-card:hover{transform:translateY(-4px);box-shadow:0 8px 30px rgba(59,130,246,0.15)}
+.stat-label{font-size:12px;color:#64748b;margin-bottom:8px}
+.stat-value{font-size:2.2rem;font-weight:700}
+.stat-sub{font-size:11px;color:#64748b;margin-top:6px}
+.stat-icon{position:absolute;bottom:1rem;right:1rem;font-size:40px;opacity:0.06}
+.card-title{font-size:13px;font-weight:500;color:#94a3b8;margin-bottom:1rem;display:flex;align-items:center;gap:8px}
+.card-title::before{content:'';width:3px;height:14px;background:linear-gradient(135deg,#3b82f6,#8b5cf6);border-radius:2px}
+.pulse{display:inline-block;width:8px;height:8px;border-radius:50%;background:#10b981;margin-right:6px;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(16,185,129,0.4)}50%{box-shadow:0 0 0 6px rgba(16,185,129,0)}}
+.live-badge{display:flex;align-items:center;font-size:11px;color:#10b981;margin-left:auto}
+select option{background:#1e293b;color:#f1f5f9}
+tr:hover{background:rgba(255,255,255,0.03)}
+</style>
+
+<style>
+.filters{display:flex;gap:8px}
+select{background:#1e293b;border:1px solid rgba(255,255,255,0.15);color:#f1f5f9;padding:6px 12px;border-radius:8px;font-size:13px;outline:none}
+.clear-btn{background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);color:#ef4444;padding:6px 12px;border-radius:8px;font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:10px;color:#64748b;font-weight:500;border-bottom:1px solid rgba(255,255,255,0.06)}
+td{padding:10px;border-bottom:1px solid rgba(255,255,255,0.03)}
+</style>
+</head>
+<body>
+
+<canvas id="bg-canvas" style="position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;pointer-events:none"></canvas>
+<div id="cursor-dot" style="width:12px;height:12px;background:#ffffff;border-radius:50%;position:fixed;pointer-events:none;z-index:99999;transform:translate(-50%,-50%);box-shadow:0 0 15px rgba(255,255,255,1),0 0 30px rgba(59,130,246,0.8);transition:transform 0.1s"></div>
+<div id="cursor-ring" style="width:36px;height:36px;border:2px solid rgba(255,255,255,0.8);border-radius:50%;position:fixed;pointer-events:none;z-index:99998;transform:translate(-50%,-50%);box-shadow:0 0 10px rgba(59,130,246,0.5);transition:width 0.2s,height 0.2s"></div>
+
+<script>
+const bgC=document.getElementById('bg-canvas');
+const bgX=bgC.getContext('2d');
+const dot=document.getElementById('cursor-dot');
+const ring=document.getElementById('cursor-ring');
+let W,H,parts,drops,angle=0,mx=0,my=0,rx=0,ry=0,trail=[];
+
+function resize(){
+  W=bgC.width=window.innerWidth;
+  H=bgC.height=window.innerHeight;
+  drops=Array.from({length:Math.floor(W/20)},()=>Math.random()*-H/16);
+}
+
+function initParts(){
+  parts=Array.from({length:60},()=>({
+    x:Math.random()*W,y:Math.random()*H,
+    r:Math.random()*1.5+0.5,
+    vx:(Math.random()-.5)*.3,vy:(Math.random()-.5)*.3,
+    o:Math.random()*.5+.1,
+    c:Math.random()>.5?'59,130,246':'139,92,246'
+  }));
+}
+
+const mc='01アイウエオカキクケコ';
+function drawBg(){
+  bgX.clearRect(0,0,W,H);
+  angle+=.002;
+  const gx=W/2+Math.cos(angle)*W*.3;
+  const gy=H/2+Math.sin(angle)*H*.3;
+  const g=bgX.createRadialGradient(gx,gy,0,W/2,H/2,Math.max(W,H));
+  g.addColorStop(0,'rgba(10,20,50,1)');
+  g.addColorStop(.5,'rgba(5,15,35,1)');
+  g.addColorStop(1,'rgba(2,8,16,1)');
+  bgX.fillStyle=g;bgX.fillRect(0,0,W,H);
+
+  const g1=bgX.createRadialGradient(W*.2,H*.2,0,W*.2,H*.2,W*.4);
+  g1.addColorStop(0,'rgba(59,130,246,0.08)');g1.addColorStop(1,'transparent');
+  bgX.fillStyle=g1;bgX.fillRect(0,0,W,H);
+
+  const g2=bgX.createRadialGradient(W*.8,H*.8,0,W*.8,H*.8,W*.4);
+  g2.addColorStop(0,'rgba(139,92,246,0.06)');g2.addColorStop(1,'transparent');
+  bgX.fillStyle=g2;bgX.fillRect(0,0,W,H);
+
+  bgX.strokeStyle='rgba(59,130,246,0.04)';bgX.lineWidth=1;
+  for(let x=0;x<W;x+=40){bgX.beginPath();bgX.moveTo(x,0);bgX.lineTo(x,H);bgX.stroke();}
+  for(let y=0;y<H;y+=40){bgX.beginPath();bgX.moveTo(0,y);bgX.lineTo(W,y);bgX.stroke();}
+
+  bgX.font='12px monospace';
+  drops.forEach((y,i)=>{
+    bgX.fillStyle='rgba(16,185,129,0.12)';
+    bgX.fillText(mc[Math.floor(Math.random()*mc.length)],i*20,y*16);
+    if(y*16>H&&Math.random()>.975)drops[i]=0;
+    drops[i]+=.5;
+  });
+
+  if(!parts)initParts();
+  parts.forEach(p=>{
+    p.x+=p.vx;p.y+=p.vy;
+    if(p.x<0||p.x>W)p.vx*=-1;
+    if(p.y<0||p.y>H)p.vy*=-1;
+    bgX.beginPath();bgX.arc(p.x,p.y,p.r,0,Math.PI*2);
+    bgX.fillStyle='rgba('+p.c+','+p.o+')';bgX.fill();
+  });
+
+  parts.forEach((p,i)=>{
+    parts.slice(i+1).forEach(q=>{
+      const d=Math.hypot(p.x-q.x,p.y-q.y);
+      if(d<100){
+        bgX.beginPath();bgX.moveTo(p.x,p.y);bgX.lineTo(q.x,q.y);
+        bgX.strokeStyle='rgba(59,130,246,'+(0.05*(1-d/100))+')';
+        bgX.lineWidth=.5;bgX.stroke();
+      }
+    });
+  });
+  requestAnimationFrame(drawBg);
+}
+
+document.addEventListener('mousemove',e=>{
+  mx=e.clientX;my=e.clientY;
+  dot.style.left=mx+'px';dot.style.top=my+'px';
+  trail.push({x:mx,y:my,age:0});
+  if(trail.length>20)trail.shift();
+});
+
+document.addEventListener('mousedown',()=>{
+  dot.style.transform='translate(-50%,-50%) scale(1.8)';
+  dot.style.background='#3b82f6';
+  ring.style.width='20px';ring.style.height='20px';
+});
+
+document.addEventListener('mouseup',()=>{
+  dot.style.transform='translate(-50%,-50%) scale(1)';
+  dot.style.background='#ffffff';
+  ring.style.width='36px';ring.style.height='36px';
+});
+
+function animCursor(){
+  rx+=(mx-rx)*.1;ry+=(my-ry)*.1;
+  ring.style.left=rx+'px';ring.style.top=ry+'px';
+  requestAnimationFrame(animCursor);
+}
+
+window.addEventListener('resize',resize);
+resize();initParts();drawBg();animCursor();
+</script>
+<style>*{cursor:none!important}</style>
+
+<div class="app" style="max-width:1200px">
+  <header>
+    <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+      <path d="M18 3L6 8v10c0 7.18 5.16 13.9 12 15.5C24.84 31.9 30 25.18 30 18V8L18 3z" fill="#3b82f6" opacity="0.3" stroke="#3b82f6" stroke-width="1.5"/>
+      <path d="M13 18l3.5 3.5L23 14" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div><h1>Prompt Injection Defense</h1><p>Attack Logs</p></div>
+    <nav>
+      <a href="/" class="nav-btn">Home</a>
+      <a href="/dashboard" class="nav-btn">Dashboard</a>
+      <a href="/logs" class="nav-btn active">Attack Logs</a>
+    </nav>
+  </header>
+  <div class="glass-panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+      <h2 style="font-size:1rem;font-weight:500">All attack logs</h2>
+      <div class="filters">
+        <select id="filterVerdict" onchange="filterLogs()">
+          <option value="all">All verdicts</option>
+          <option value="blocked">Blocked only</option>
+          <option value="safe">Safe only</option>
+        </select>
+        <select id="filterCategory" onchange="filterLogs()">
+          <option value="all">All categories</option>
+          <option value="jailbreak">Jailbreak</option>
+          <option value="harmful_content">Harmful content</option>
+          <option value="bypass_attempt">Bypass attempt</option>
+          <option value="real_attack">Real attack</option>
+          <option value="safe">Safe</option>
+        </select>
+        <button class="clear-btn" onclick="clearLogs()">Clear logs</button>
+      </div>
+    </div>
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr><th>Timestamp</th><th>Prompt</th><th>Category</th><th>Stage</th><th>Verdict</th><th>Reason</th></tr></thead>
+        <tbody id="logs-body"><tr><td colspan="6" style="text-align:center;color:#64748b;padding:20px">Loading logs...</td></tr></tbody>
+      </table>
+    </div>
+    <div id="log-count" style="margin-top:1rem;font-size:12px;color:#64748b;text-align:right"></div>
+  </div>
+</div>
+<script>
+const COLORS={jailbreak:'#ef4444',harmful_content:'#f59e0b',bypass_attempt:'#3b82f6',real_attack:'#8b5cf6',safe:'#10b981',error:'#6b7280',unknown:'#6b7280',ignore_instructions:'#ef4444',parse_error:'#6b7280',long_prompt:'#f59e0b'};
+let allLogs=[];
+async function loadLogs(){
+  try{
+    const res=await fetch('/api/logs');
+    allLogs=await res.json();filterLogs();
+  }catch(e){document.getElementById('logs-body').innerHTML='<tr><td colspan="6" style="text-align:center;color:#ef4444;padding:20px">Error loading logs</td></tr>';}
+}
+function filterLogs(){
+  const v=document.getElementById('filterVerdict').value;
+  const c=document.getElementById('filterCategory').value;
+  let f=allLogs;
+  if(v!=='all')f=f.filter(l=>l.verdict===v);
+  if(c!=='all')f=f.filter(l=>l.category===c);
+  renderLogs(f);
+  document.getElementById('log-count').textContent='Showing '+f.length+' of '+allLogs.length+' logs';
+}
+function renderLogs(logs){
+  if(logs.length===0){document.getElementById('logs-body').innerHTML='<tr><td colspan="6" style="text-align:center;color:#64748b;padding:20px">No logs found</td></tr>';return;}
+  document.getElementById('logs-body').innerHTML=logs.map(l=>{
+    const color=COLORS[l.category]||'#6b7280';
+    const vc=l.verdict==='blocked'?'#ef4444':'#10b981';
+    return '<tr><td style="color:#64748b;white-space:nowrap">'+l.timestamp+'</td><td style="color:#f1f5f9;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+l.prompt+'">'+l.prompt+'</td><td><span style="background:'+color+'22;color:'+color+';padding:2px 8px;border-radius:4px;font-size:11px;white-space:nowrap">'+l.category+'</span></td><td style="color:#64748b;font-size:12px">'+l.stage+'</td><td><span style="background:'+vc+'22;color:'+vc+';padding:2px 8px;border-radius:4px;font-size:11px">'+l.verdict.toUpperCase()+'</span></td><td style="color:#64748b;font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+l.reason+'">'+l.reason+'</td></tr>';
+  }).join('');
+}
+async function clearLogs(){
+  if(!confirm('Clear all logs?'))return;
+  await fetch('/api/logs',{method:'DELETE'});
+  allLogs=[];filterLogs();
+}
+loadLogs();setInterval(loadLogs,5000);
+</script>
+</body>
+</html>
